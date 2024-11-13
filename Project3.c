@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <semaphore.h>
 
 // Lock
 pthread_mutex_t cpu_mutex;
