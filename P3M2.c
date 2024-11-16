@@ -27,11 +27,14 @@ struct CpuCore{
     int zeroFlag;
     int overFlowFlag;
     int errorFlag;
+    int currentProcess;
+    int coreID;
 };
 struct CpuCore cores[2];
 
 void initCpuCores(){
     //core 1 initializes here
+    cores[0].coreID = 0;
     cores[0].PC = 0;
     cores[0].ACC = 0;
     cores[0].IR = 0;
@@ -42,8 +45,10 @@ void initCpuCores(){
     cores[0].zeroFlag = 0;
     cores[0].overFlowFlag = 0;
     cores[0].errorFlag = 0;
+    cores[0].currentProcess = 0;
     
     //core 2 initializes here
+    cores[1].coreID = 1;
     cores[1].PC = 20;
     cores[1].ACC = 0;
     cores[1].IR = 0;
@@ -54,6 +59,7 @@ void initCpuCores(){
     cores[1].zeroFlag = 0;
     cores[1].overFlowFlag = 0;
     cores[1].errorFlag = 0;
+    cores[1].currentProcess = 3;
 } 
 
 //Define constants for instruction set
@@ -89,7 +95,6 @@ struct Tags L1Tags[L1_CACHE_SIZE];
 struct Tags L2Tags[L2_CACHE_SIZE];
 
 //Mutexes and semaphores for safe access
-pthread_mutex_t memory_mutex;
 sem_t cache_semaphore;
 
 //Structure for the Memory Table entry
@@ -101,6 +106,41 @@ struct MemoryBlock {
 };
 #define MEMORY_TABLE_SIZE 10
 struct MemoryBlock memoryTable[RAM_SIZE / 100];
+
+// Process Variables and Structs (M3)
+#define MAX_PROCESSES 6
+#define TIME_SLICE 5
+#define MAX_MESSAGES 10
+
+struct MessageQueue {
+	int messages[MAX_MESSAGES];
+	int data[MAX_MESSAGES];
+	int size;
+};
+
+struct PCB {
+	int pid;
+	int pc;
+	int acc;
+	int state; // Process state (0 = ready, 1 = running, 3 = terminated)
+	int time; // Process time
+	int priority; // Process Priority Level (Higher number = higher priority)
+	struct MessageQueue messagesQueue; // Message Queue from IPC
+};
+
+// Core 1: Processes 1 - 3
+// Core 2: Processes 4 - 6
+struct PCB processTable[MAX_PROCESSES];
+
+// Messages List
+#define START 1
+#define NEW_PC 2
+#define NEW_ACC 3
+
+// Interrupts (M4)
+void (*IVT[3]); // Interrupt Vector Table
+
+
 
 //do - create a memo table
 //Function to initialize the Memory Table
@@ -310,15 +350,14 @@ void cacheWrite(int address, int data, int writePolicy) {
 int accessMemory(int address, int data, bool isWrite) {
  int result;
  if (isWrite) {
- pthread_mutex_lock(&memory_mutex); //lock memory for exclusive access
- cacheWrite(address, data, 1); //use 1 for write-policy through policy in this example
- pthread_mutex_unlock(&memory_mutex); //unlock memory
- result = 0;
- }
- else {
- pthread_mutex_lock(&memory_mutex); //lock memory for exclusive access
- result = cacheLookup(address); //fetch data from cache or RAM
- pthread_mutex_unlock(&memory_mutex); //unlock memory
+	sem_wait(&cache_semaphore); //lock memory for exclusive access
+	cacheWrite(address, data, 1); //use 1 for write-policy through policy in this example
+	sem_post(&cache_semaphore); //unlock memory
+	result = 0;
+ } else {
+ 	sem_wait(&cache_semaphore); //lock memory for exclusive access
+	result = cacheLookup(address); //fetch data from cache or RAM
+	sem_post(&cache_semaphore); //unlock memory
 
  }
  return result;
@@ -478,61 +517,29 @@ void execute(int coreNum){
 }
 
 //Function to simulate the instruction cycle with concurrency
-//Function to simulate the instruction cycle with concurrency
 void* cpuCore(void* arg) {
 int coreNum = *(int *)arg;
     while (1) {
         if(cores[coreNum].errorFlag == 1){
-        break;
+        	break;
         }
         //Lock memory for exclusive access
         fetch(coreNum); //fetch instruction
         execute(coreNum); //decode and execute instruction
+	processTable[cores[coreNum].currentProcess].time -= TIME_SLICE;
+	printf("Current Process: %d, Time: %d\n", processTable[cores[coreNum].currentProcess].pid, processTable[cores[coreNum].currentProcess].time);
         //Stop condition (example: check PC bounds)
         if (cores[coreNum].PC >= cores[coreNum].endMemAdd || cores[coreNum].PC < cores[coreNum].startMemAdd) break;
         sleep(1);
     }
     if(cores[coreNum].errorFlag == 1){
-    printf("Core %d Error Exit\n", coreNum +1);
+    	printf("Core %d Error Exit\n", coreNum +1);
     }
     else{
-    printf("Core %d Execution Complete\n", coreNum + 1);
+    	printf("Core %d Execution Complete\n", coreNum + 1);
     }
         return NULL;
 }
-
-/*
-// Process Variables and Structs (M3)
-#define MAX_PROCESSES 3
-#define TIME_SLICE 5
-#define MAX_MESSAGES 10
-int currentProcess = 0;
-
-struct MessageQueue {
-	int messages[MAX_MESSAGES];
-	int data[MAX_MESSAGES];
-	int size;
-};
-
-struct PCB {
-	int pid;
-	int pc;
-	int acc;
-	int state; // Process state (0 = ready, 1 = running, 3 = terminated)
-	int time; // Process time
-	int priority; // Process Priority Level (Higher number = higher priority)
-	struct MessageQueue messagesQueue; // Message Queue from IPC
-};
-
-struct PCB processTable[MAX_PROCESSES];
-
-// Messages List
-#define START 1
-#define NEW_PC 2
-#define NEW_ACC 3
-
-// Interrupts (M4)
-void (*IVT[3])(); // Interrupt Vector Table
 
 bool complete_processes() {
 	for (int i = 0; i < MAX_PROCESSES; i++) {
@@ -555,28 +562,38 @@ void initProcesses() {
 	}
 }
 
-void contextSwitch(int currProcess, int nextProcess) {
-	processTable[currProcess].pc = PC;
-	processTable[currProcess].acc = ACC;
+void contextSwitch(int currProcess, int nextProcess, int coreID) {
+	processTable[currProcess].pc = cores[coreID].PC;
+	processTable[currProcess].acc = cores[coreID].ACC;
 	if (processTable[currProcess].state != 3) {
 		processTable[currProcess].state = 0;
 	}
-	PC = processTable[nextProcess].pc;
-	ACC = processTable[nextProcess].acc;
+	cores[coreID].PC = processTable[nextProcess].pc;
+	cores[coreID].ACC = processTable[nextProcess].acc;
 	processTable[nextProcess].state = 1;
 
 	printf("Context switch complete! Process %d to Process %d\n", processTable[currProcess].pid, processTable[nextProcess].pid);
 }
 
-void round_robin() {
-	int nextProcess = (currentProcess + 1) % MAX_PROCESSES;
+void round_robin(int coreID) {
+	int currentProcess = cores[coreID].currentProcess;
+	int nextProcess;
+	if (coreID = 0) {
+		nextProcess = (currentProcess + 1) % 3;
+	} else {
+		nextProcess = ((currentProcess + 1) % 3) + 3;
+	}
 	while (processTable[nextProcess].state == 3) {
-		nextProcess = (nextProcess + 1) % MAX_PROCESSES;
+		if (coreID = 0) {
+			nextProcess = (nextProcess + 1) % 3;
+		} else {
+			nextProcess = ((nextProcess + 1) % 3) + 3;
+		}
 		printf("Next Process ID: %d, State: %d, Time: %d\n", processTable[nextProcess].pid, processTable[nextProcess].state, processTable[nextProcess].time);
 		if (nextProcess == currentProcess) {
 			if (processTable[nextProcess].state != 3) {
-				contextSwitch(currentProcess, nextProcess);
-				currentProcess = nextProcess;
+				contextSwitch(currentProcess, nextProcess, coreID);
+				cores[coreID].currentProcess = nextProcess;
 			} else {
 				printf("All processes complete.\n");
 				break;
@@ -584,34 +601,41 @@ void round_robin() {
 		}
 	}
 	if (processTable[nextProcess].state == 0) {
-		contextSwitch(currentProcess, nextProcess);
-		currentProcess = nextProcess;
+		contextSwitch(currentProcess, nextProcess, coreID);
+		cores[coreID].currentProcess = nextProcess;
 	}
 	return;
 }
 
-void priorityScheduler() {
+void priorityScheduler(int coreID) {
 	int highestIndex = -1;
 	int highestPriority = -1;
+	int startingIndex;
+	
+	if (coreID = 0) {
+		startingIndex = 0;
+	} else {
+		startingIndex = 3;
+	}
 
-	for (int i = 0; i < MAX_PROCESSES; i++) {
-		if (processTable[i].state == 0) {
-			if (processTable[i].priority > highestPriority) {
-				highestPriority = processTable[i].priority;
-				highestIndex = i;
+	for (startingIndex; startingIndex < startingIndex + 3; startingIndex++) {
+		if (processTable[startingIndex].state == 0) {
+			if (processTable[startingIndex].priority > highestPriority) {
+				highestPriority = processTable[startingIndex].priority;
+				highestIndex = startingIndex;
 			}
 		}
 	}
 	if (highestIndex != -1) {
-		contextSwitch(currentProcess, highestIndex);
-		currentProcess = highestIndex;
+		contextSwitch(cores[coreID].currentProcess, highestIndex, coreID);
+		cores[coreID].currentProcess = highestIndex;
 	} else {
 		printf("No ready processes found.\n");
 	}
 }
 // int int int -> void
 // Purpose: Takes a processID (receiver), a message, and data for that message and sends the message and data to the receiver.
-void sendMessage(int process, int message, int dataSent) {
+void sendMessage(int process, int message, int dataSent, int coreID) {
 	struct MessageQueue *queue = &processTable[process].messagesQueue;
 
 	if (queue->size < MAX_MESSAGES) {
@@ -619,7 +643,7 @@ void sendMessage(int process, int message, int dataSent) {
 		queue->messages[index] = message;
 		queue->data[index] = dataSent;
 		queue->size++;
-		printf("Message sent from Process %d to Process %d\n", currentProcess, process);
+		printf("Message sent from Process %d to Process %d\n", cores[coreID].currentProcess, process);
 	} else {
 		printf("Message Queue is full for Process %d!\n", process);
 	}
@@ -657,19 +681,19 @@ void recieveMessage(int process) {
 }
 
 void* schedulingTask(void* arg) {
+	int coreNum = *(int *)arg;
 	while (1) {
 		pthread_mutex_lock(&scheduling_mutex);
-		round_robin();
+		round_robin(coreNum);
 		pthread_mutex_unlock(&scheduling_mutex);
 		if (complete_processes()) {
 			printf("Completion detected in schedulingTask!");
 			break;
 		}
-		sleep(TIME_SLICE);
+		sleep(1);
 	}
 	return NULL;
 }
-*/
 
 void startCores(){
  initCpuCores();
@@ -682,43 +706,39 @@ void startCores(){
  //create a thread for concurrent processing
  pthread_t cpu_thread;
  pthread_t cpu_thread2;
+ pthread_t schedulingthread;
+ pthread_t schedulingthread2;
  
  pthread_create(&cpu_thread, NULL, cpuCore, core1);
  pthread_create(&cpu_thread2,NULL, cpuCore, core2);
- 
+
+ pthread_create(&schedulingthread, NULL, schedulingTask, core1);
+ pthread_create(&schedulingthread2, NULL, schedulingTask, core2);
+printf("All threads created!\n");
  //wait for the thread to complete
  pthread_join(cpu_thread, NULL);
  pthread_join(cpu_thread2, NULL);
+ pthread_join(schedulingthread, NULL);
+ pthread_join(schedulingthread2, NULL);
 
  free(core1);
  free(core2);
+ printf("All threads terminated!\n");
 }
 
 int main() {
 	loadProgram(); //initialize memory with instructions
 	initMemoryTable();
-    initCache();
+	initCache();
+	initProcesses();
 	
 	pthread_mutex_init(&memory_mutex, NULL);
  	sem_init(&cache_semaphore, 0, 1);
 
-	//pthread_mutex_init(&scheduling_mutex, NULL);
-	//initialize mutex for memory access
- 	//pthread_mutex_init(&memory_mutex, NULL);
-	//Example of memory allocation and deallocation
- 	//int address = allocateMemory(1, 16); //eg : allocation for process 1
-	//create a thread for concurrent processing
- 	//pthread_t cpu_thread;
-	//pthread_t scheduler_thread;
-	//pthread_create(&scheduler_thread, NULL, schedulingTask, NULL);
-	//pthread_create(&cpu_thread, NULL, cpuCore, NULL);
- 	//wait for the thread to complete
- 	//pthread_join(cpu_thread, NULL);
-	//pthread_join(scheduler_thread, NULL);
-	//deallocate - memory for process 1
-	//deallocateMemory(1);
-	//clean up mutex
-    startCores();
+	pthread_mutex_init(&scheduling_mutex, NULL);
+
+	startCores();
+
 	pthread_mutex_destroy(&scheduling_mutex);
 	pthread_mutex_destroy(&memory_mutex);
  	sem_destroy(&cache_semaphore);
