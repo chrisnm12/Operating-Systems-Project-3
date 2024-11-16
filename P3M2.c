@@ -59,7 +59,7 @@ void initCpuCores(){
     cores[1].zeroFlag = 0;
     cores[1].overFlowFlag = 0;
     cores[1].errorFlag = 0;
-    cores[1].currentProcess = 3;
+    cores[1].currentProcess = 0;
 } 
 
 //Define constants for instruction set
@@ -417,17 +417,22 @@ void execute(int coreNum){
 
     //Decode the instruction in IR
     //Implement logic to extract the opcode and operands   
-    int opcode = cores[coreNum].IR;
-    int operand = accessMemory(cores[coreNum].PC + 1, 1, false);
-    int result;
-    int prev;
+	struct PCB currProcess = processTable[cores[coreNum].currentProcess];
+	int opcode = cores[coreNum].IR;
+	int operand = accessMemory(cores[coreNum].PC + 1, 1, false);
+	int result;
+	int prev;
+	int core = coreNum + 1;
+	if (currProcess.state == 3 && currProcess.time <= 0) {
+		printf("terminated process detected in execute.\n");
+		return;
+	}
 
        switch (opcode) {
         case ADD: 
             prev = cores[coreNum].ACC;
             result = cores[coreNum].ACC + operand;
             cores[coreNum].ACC = result;
-            int core = coreNum + 1;
             printf("Core %d Operation Adding: %d + %d = %d\n", core, prev, operand, cores[coreNum].ACC);
             break;
         case SUB:
@@ -516,21 +521,45 @@ void execute(int coreNum){
     cores[coreNum].PC += 2; //Move to the next instruction
 }
 
+bool completeProcessesForCpu() {
+	for (int i = 0; i < MAX_PROCESSES; i++) {
+		if (processTable[i].state != 3) {
+			return false;
+		}
+	}
+	return true;
+}
+
 //Function to simulate the instruction cycle with concurrency
 void* cpuCore(void* arg) {
-int coreNum = *(int *)arg;
-    while (1) {
-        if(cores[coreNum].errorFlag == 1){
-        	break;
-        }
-        //Lock memory for exclusive access
+	int coreNum = *(int *)arg;
+	while (1) {
+		if (cores[coreNum].errorFlag == 1) {
+			break;
+		}
+	if (completeProcessesForCpu()) {
+		printf("Processes completed in cpuCore!\n");
+		break;
+	}
         fetch(coreNum); //fetch instruction
         execute(coreNum); //decode and execute instruction
+	
+	processTable[cores[coreNum].currentProcess].pc = cores[coreNum].PC;
+	processTable[cores[coreNum].currentProcess].acc = cores[coreNum].ACC;
 	processTable[cores[coreNum].currentProcess].time -= TIME_SLICE;
+	if (processTable[cores[coreNum].currentProcess].time <= 0) {
+		processTable[cores[coreNum].currentProcess].time = 0;
+		processTable[cores[coreNum].currentProcess].state = 3;
+	} else {
+		processTable[cores[coreNum].currentProcess].state = 0;
+	}
 	printf("Current Process: %d, Time: %d\n", processTable[cores[coreNum].currentProcess].pid, processTable[cores[coreNum].currentProcess].time);
         //Stop condition (example: check PC bounds)
-        if (cores[coreNum].PC >= cores[coreNum].endMemAdd || cores[coreNum].PC < cores[coreNum].startMemAdd) break;
-        sleep(1);
+        if (cores[coreNum].PC >= cores[coreNum].endMemAdd || cores[coreNum].PC < cores[coreNum].startMemAdd) {
+		printf("Core %d PC: %d, endMem: %d, startMem: %d\n", coreNum + 1, cores[coreNum].PC, cores[coreNum].endMemAdd, cores[coreNum].startMemAdd);
+		break;
+	}
+	sleep(1);
     }
     if(cores[coreNum].errorFlag == 1){
     	printf("Core %d Error Exit\n", coreNum +1);
@@ -541,8 +570,15 @@ int coreNum = *(int *)arg;
         return NULL;
 }
 
-bool complete_processes() {
-	for (int i = 0; i < MAX_PROCESSES; i++) {
+bool complete_processes(int coreID) {
+	int startIndex;
+	if (coreID == 0) {
+		startIndex = 0;
+	} else {
+		startIndex = 3;
+	}
+	int endIndex = startIndex + 2;
+	for (int i = startIndex; i < endIndex; i++) {
 		if (processTable[i].state != 3) {
 			return false;
 		}
@@ -553,16 +589,24 @@ bool complete_processes() {
 void initProcesses() {
 	for (int i = 0; i < MAX_PROCESSES; i++) {
 		processTable[i].pid = 100 + (i * 100);
-		processTable[i].pc = 0;
+		if (i < 3) {
+			processTable[i].pc = 0;
+		} else {
+			processTable[i].pc = 20;
+		}
 		processTable[i].acc = 0;
 		processTable[i].state = 0;
-		processTable[i].time = (rand() % 24) + 1;
+		processTable[i].time = (rand() % 14) + 1;
 		processTable[i].priority = (rand() % 5) + 1;
 		processTable[i].messagesQueue.size = 0;
 	}
 }
 
 void contextSwitch(int currProcess, int nextProcess, int coreID) {
+	if (processTable[nextProcess].state != 0 && processTable[nextProcess].state != 1) {
+		printf("Invalid context switch to non-ready/running process.\n");
+		return;
+	}
 	processTable[currProcess].pc = cores[coreID].PC;
 	processTable[currProcess].acc = cores[coreID].ACC;
 	if (processTable[currProcess].state != 3) {
@@ -572,30 +616,42 @@ void contextSwitch(int currProcess, int nextProcess, int coreID) {
 	cores[coreID].ACC = processTable[nextProcess].acc;
 	processTable[nextProcess].state = 1;
 
-	printf("Context switch complete! Process %d to Process %d\n", processTable[currProcess].pid, processTable[nextProcess].pid);
+	printf("Core %d, PC: %d\n", coreID + 1, cores[coreID].PC);
+	// printf("Context switch complete! Process %d to Process %d\n", processTable[currProcess].pid, processTable[nextProcess].pid);
+}
+
+void allProcesses(int coreID) {
+	for (int i = 0; i < MAX_PROCESSES; i++) {
+		printf("Process ID: %d, PC: %d, ACC: %d, State: %d, Time: %d\n", processTable[i].pid, processTable[i].pc, processTable[i].acc, processTable[i].state, processTable[i].time);
+	}
+	return;
 }
 
 void round_robin(int coreID) {
 	int currentProcess = cores[coreID].currentProcess;
 	int nextProcess;
-	if (coreID = 0) {
+	if (coreID == 0) {
+		printf("SHOULD BE 1 Core %d in round robin\n", coreID + 1); 
 		nextProcess = (currentProcess + 1) % 3;
 	} else {
+		printf("SHOULD BE 2 Core %d in round robin\n", coreID + 1);
 		nextProcess = ((currentProcess + 1) % 3) + 3;
 	}
+	allProcesses(coreID);
 	while (processTable[nextProcess].state == 3) {
-		if (coreID = 0) {
+		if (coreID == 0) {
+			printf("SHOULD BE 1 Core %d in round robin\n", coreID + 1);
 			nextProcess = (nextProcess + 1) % 3;
 		} else {
+			printf("SHOULD BE 2 Core %d in round robin\n", coreID + 1); 
 			nextProcess = ((nextProcess + 1) % 3) + 3;
 		}
-		printf("Next Process ID: %d, State: %d, Time: %d\n", processTable[nextProcess].pid, processTable[nextProcess].state, processTable[nextProcess].time);
 		if (nextProcess == currentProcess) {
 			if (processTable[nextProcess].state != 3) {
 				contextSwitch(currentProcess, nextProcess, coreID);
 				cores[coreID].currentProcess = nextProcess;
 			} else {
-				printf("All processes complete.\n");
+				printf("All processes complete for core: %d\n", coreID + 1);
 				break;
 			}
 		}
@@ -686,8 +742,8 @@ void* schedulingTask(void* arg) {
 		pthread_mutex_lock(&scheduling_mutex);
 		round_robin(coreNum);
 		pthread_mutex_unlock(&scheduling_mutex);
-		if (complete_processes()) {
-			printf("Completion detected in schedulingTask!");
+		if (complete_processes(coreNum)) {
+			printf("Completion detected in schedulingTask!\n");
 			break;
 		}
 		sleep(1);
@@ -710,15 +766,17 @@ void startCores(){
  pthread_t schedulingthread2;
  
  pthread_create(&cpu_thread, NULL, cpuCore, core1);
- pthread_create(&cpu_thread2,NULL, cpuCore, core2);
+ pthread_create(&cpu_thread2, NULL, cpuCore, core2);
 
  pthread_create(&schedulingthread, NULL, schedulingTask, core1);
  pthread_create(&schedulingthread2, NULL, schedulingTask, core2);
-printf("All threads created!\n");
  //wait for the thread to complete
  pthread_join(cpu_thread, NULL);
+ printf("CPU 1 thread joined.\n");
  pthread_join(cpu_thread2, NULL);
+ printf("CPU 2 thread joined.\n");
  pthread_join(schedulingthread, NULL);
+ printf("scheduling thread 1 joined.\n");
  pthread_join(schedulingthread2, NULL);
 
  free(core1);
