@@ -16,13 +16,14 @@ pthread_mutex_t scheduling_mutex;
 pthread_mutex_t interrupts_mutex;
 
 //cpu core registration system.
-struct CpuCore{
+struct CpuCore {
     int PC;
     int ACC;
     int IR;
     int startMemAdd;
     int endMemAdd;
-    int interruptFlag; // flag to signal the interrupt
+    int interruptFlag;
+    int interruptType;
     int carryFlag;
     int zeroFlag;
     int overFlowFlag;
@@ -30,6 +31,7 @@ struct CpuCore{
     int currentProcess;
     int coreID;
 };
+
 struct CpuCore cores[2];
 
 void initCpuCores(){
@@ -41,6 +43,7 @@ void initCpuCores(){
     cores[0].startMemAdd = 0;
     cores[0].endMemAdd = 19;
     cores[0].interruptFlag = 0;
+    cores[0].interruptType = -1;
     cores[0].carryFlag = 0;
     cores[0].zeroFlag = 0;
     cores[0].overFlowFlag = 0;
@@ -55,11 +58,12 @@ void initCpuCores(){
     cores[1].startMemAdd = 20;
     cores[1].endMemAdd = 37;
     cores[1].interruptFlag = 0;
+    cores[1].interruptType = -1;
     cores[1].carryFlag = 0;
     cores[1].zeroFlag = 0;
     cores[1].overFlowFlag = 0;
     cores[1].errorFlag = 0;
-    cores[1].currentProcess = 0;
+    cores[1].currentProcess = 3;
 } 
 
 //Define constants for instruction set
@@ -138,8 +142,15 @@ struct PCB processTable[MAX_PROCESSES];
 #define NEW_ACC 3
 
 // Interrupts (M4)
-void (*IVT[3]); // Interrupt Vector Table
+void (*IVT[3])(int); // Interrupt Vector Table
+#define TIMER_INTERRUPT 0
+#define IO_INTERRUPT 1
+#define SYSTEMCALL_INTERRUPT 2
 
+int generateRandomNum() {
+	int randomNum = rand() % 2;
+	return randomNum;
+}
 
 
 //do - create a memo table
@@ -427,8 +438,8 @@ void execute(int coreNum){
 		printf("terminated process detected in execute.\n");
 		return;
 	}
-
-       switch (opcode) {
+	
+	switch (opcode) {
         case ADD: 
             prev = cores[coreNum].ACC;
             result = cores[coreNum].ACC + operand;
@@ -521,8 +532,24 @@ void execute(int coreNum){
     cores[coreNum].PC += 2; //Move to the next instruction
 }
 
-bool completeProcessesForCpu() {
+bool completeProcessesForAll() {
 	for (int i = 0; i < MAX_PROCESSES; i++) {
+		if (processTable[i].state != 3) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool complete_processes(int coreID) {
+	int startIndex;
+	if (coreID == 0) {
+		startIndex = 0;
+	} else {
+		startIndex = 3;
+	}
+	int endIndex = startIndex + 2;
+	for (int i = startIndex; i < endIndex; i++) {
 		if (processTable[i].state != 3) {
 			return false;
 		}
@@ -537,9 +564,12 @@ void* cpuCore(void* arg) {
 		if (cores[coreNum].errorFlag == 1) {
 			break;
 		}
-	if (completeProcessesForCpu()) {
+	if (complete_processes(coreNum)) {
 		printf("Processes completed in cpuCore!\n");
 		break;
+	}
+	if (cores[coreNum].interruptFlag) {
+		sleep(2);
 	}
         fetch(coreNum); //fetch instruction
         execute(coreNum); //decode and execute instruction
@@ -568,22 +598,6 @@ void* cpuCore(void* arg) {
     	printf("Core %d Execution Complete\n", coreNum + 1);
     }
         return NULL;
-}
-
-bool complete_processes(int coreID) {
-	int startIndex;
-	if (coreID == 0) {
-		startIndex = 0;
-	} else {
-		startIndex = 3;
-	}
-	int endIndex = startIndex + 2;
-	for (int i = startIndex; i < endIndex; i++) {
-		if (processTable[i].state != 3) {
-			return false;
-		}
-	}
-	return true;
 }
 
 void initProcesses() {
@@ -739,6 +753,9 @@ void recieveMessage(int process) {
 void* schedulingTask(void* arg) {
 	int coreNum = *(int *)arg;
 	while (1) {
+		if (cores[coreNum].interruptFlag) {
+			sleep(2);
+		}
 		pthread_mutex_lock(&scheduling_mutex);
 		round_robin(coreNum);
 		pthread_mutex_unlock(&scheduling_mutex);
@@ -748,8 +765,130 @@ void* schedulingTask(void* arg) {
 		}
 		sleep(1);
 	}
-	return NULL;
 }
+
+void timerInterrupt(int coreID) {
+	 printf("Timer Interrupt Detected in Core %d!\n", coreID + 1); 
+	 sleep(2);
+	 printf("Timer Done in Core %d!\n", coreID + 1);
+	 cores[coreID].interruptFlag = 0;
+	 cores[coreID].interruptType = -1;
+	 return;
+}
+
+void ioInterrupt(int coreID) {
+	printf("IO Interrupt Detected in Core %d!\n", coreID + 1);
+	sleep(2);
+	printf("IO Done in Core %d!\n", coreID + 1);
+	cores[coreID].interruptFlag = 0;
+	cores[coreID].interruptType = -1;
+	return;
+}
+
+void systemCallInterrupt(int coreID) {
+	printf("System Call Interrupt Detected in Core %d!\n", coreID + 1);
+	sleep(2);
+	printf("System Call Done in Core %d!\n", coreID + 1);
+	cores[coreID].interruptFlag = 0;
+	cores[coreID].interruptType = -1;
+	return;
+}
+
+void initInterrupts() {
+	IVT[0] = timerInterrupt;
+	IVT[1] = ioInterrupt;
+	IVT[2] = systemCallInterrupt;
+}
+
+void ISR(int coreID, int interruptType) {
+	cores[coreID].interruptFlag = 1;
+	int nextProcess, startProcess;
+	switch (interruptType) {
+		case TIMER_INTERRUPT:
+			IVT[0](coreID);
+			break;
+		case IO_INTERRUPT:
+			IVT[1](coreID);
+			break;
+		case SYSTEMCALL_INTERRUPT:
+			IVT[2](coreID);
+			break;
+		default:
+			printf("Unknown interrupt type given: %d\n", interruptType);
+			break;
+	}
+	if (coreID == 0) {
+		startProcess = cores[0].currentProcess;
+		nextProcess = (startProcess + 1) % 3;
+		while (processTable[nextProcess].state == 3) {
+			nextProcess = (nextProcess + 1) % 3;
+			if (startProcess == nextProcess) {
+				if (processTable[nextProcess].state != 3) {
+					break;
+				} else {
+					printf("No available processes found for core %d\n", coreID);
+					return;
+				}
+			}
+		}
+	} else {
+		startProcess = cores[1].currentProcess;
+		nextProcess = ((startProcess + 1) % 3) + 3;
+		while (processTable[nextProcess].state == 3) {
+			nextProcess = ((startProcess + 1) % 3) + 3;
+			if (startProcess == nextProcess) {
+				if (processTable[nextProcess].state != 3) {
+					break;
+				} else {
+					printf("No available processes found for core %d\n", coreID);
+					return;
+				}
+			}
+		}
+	}
+	printf("Current Process: %d, Next Process: %d\n", startProcess, nextProcess);
+	processTable[cores[coreID].currentProcess].state = 0;
+	contextSwitch(startProcess, nextProcess, coreID);
+	cores[coreID].currentProcess = nextProcess;
+}
+
+void timerStart() {
+	int randomNum = generateRandomNum();
+	if (randomNum == 0) {
+		cores[0].interruptType = TIMER_INTERRUPT;
+		ISR(0, TIMER_INTERRUPT);
+	} else {
+		cores[1].interruptType = TIMER_INTERRUPT;
+		ISR(1, TIMER_INTERRUPT);
+	}
+}
+
+void* interruptTask(void* arg) {
+	signal(SIGALRM, timerStart);
+	while (1) {
+		if (completeProcessesForAll()) {
+			printf("Completion detected in interrupt thread!\n");
+			break;
+		}
+		pthread_mutex_lock(&interrupts_mutex);
+		char input = getchar();
+		int coreNum;
+		if (input == 'k') {
+			coreNum = generateRandomNum();
+			cores[coreNum].interruptType = IO_INTERRUPT;
+			ISR(coreNum, cores[coreNum].interruptType);
+		} else if (input == 's') {
+			coreNum = generateRandomNum();
+			cores[coreNum].interruptType = SYSTEMCALL_INTERRUPT;
+			ISR(coreNum, cores[coreNum].interruptType);
+		} else {
+			alarm(1);
+		}
+		pthread_mutex_unlock(&interrupts_mutex);
+	}
+	printf("Interrupt Thread completed!\n");
+}
+
 
 void startCores(){
  initCpuCores();
@@ -764,12 +903,16 @@ void startCores(){
  pthread_t cpu_thread2;
  pthread_t schedulingthread;
  pthread_t schedulingthread2;
+ pthread_t interruptthread;
  
  pthread_create(&cpu_thread, NULL, cpuCore, core1);
  pthread_create(&cpu_thread2, NULL, cpuCore, core2);
 
  pthread_create(&schedulingthread, NULL, schedulingTask, core1);
  pthread_create(&schedulingthread2, NULL, schedulingTask, core2);
+ 
+ pthread_create(&interruptthread, NULL, interruptTask, NULL);
+
  //wait for the thread to complete
  pthread_join(cpu_thread, NULL);
  printf("CPU 1 thread joined.\n");
@@ -778,6 +921,9 @@ void startCores(){
  pthread_join(schedulingthread, NULL);
  printf("scheduling thread 1 joined.\n");
  pthread_join(schedulingthread2, NULL);
+ printf("scheduling thread 2 joined.\n");
+ pthread_join(interruptthread, NULL);
+ printf("interrupt thread joined.\n");
 
  free(core1);
  free(core2);
@@ -789,15 +935,19 @@ int main() {
 	initMemoryTable();
 	initCache();
 	initProcesses();
+	initInterrupts();
 	
 	pthread_mutex_init(&memory_mutex, NULL);
  	sem_init(&cache_semaphore, 0, 1);
 
 	pthread_mutex_init(&scheduling_mutex, NULL);
 
+	pthread_mutex_init(&interrupts_mutex, NULL);
+
 	startCores();
 
 	pthread_mutex_destroy(&scheduling_mutex);
+	pthread_mutex_destroy(&interrupts_mutex);
 	pthread_mutex_destroy(&memory_mutex);
  	sem_destroy(&cache_semaphore);
 	return 0;
