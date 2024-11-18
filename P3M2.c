@@ -573,7 +573,6 @@ void* cpuCore(void* arg) {
 	}
         fetch(coreNum); //fetch instruction
         execute(coreNum); //decode and execute instruction
-	
 	processTable[cores[coreNum].currentProcess].pc = cores[coreNum].PC;
 	processTable[cores[coreNum].currentProcess].acc = cores[coreNum].ACC;
 	processTable[cores[coreNum].currentProcess].time -= TIME_SLICE;
@@ -583,7 +582,6 @@ void* cpuCore(void* arg) {
 	} else {
 		processTable[cores[coreNum].currentProcess].state = 0;
 	}
-	printf("Current Process: %d, Time: %d\n", processTable[cores[coreNum].currentProcess].pid, processTable[cores[coreNum].currentProcess].time);
         //Stop condition (example: check PC bounds)
         if (cores[coreNum].PC >= cores[coreNum].endMemAdd || cores[coreNum].PC < cores[coreNum].startMemAdd) {
 		printf("Core %d PC: %d, endMem: %d, startMem: %d\n", coreNum + 1, cores[coreNum].PC, cores[coreNum].endMemAdd, cores[coreNum].startMemAdd);
@@ -630,8 +628,7 @@ void contextSwitch(int currProcess, int nextProcess, int coreID) {
 	cores[coreID].ACC = processTable[nextProcess].acc;
 	processTable[nextProcess].state = 1;
 
-	printf("Core %d, PC: %d\n", coreID + 1, cores[coreID].PC);
-	// printf("Context switch complete! Process %d to Process %d\n", processTable[currProcess].pid, processTable[nextProcess].pid);
+	printf("Context switch complete! Process %d to Process %d\n", processTable[currProcess].pid, processTable[nextProcess].pid);
 }
 
 void allProcesses(int coreID) {
