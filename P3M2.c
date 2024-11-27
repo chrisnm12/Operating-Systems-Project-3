@@ -9,6 +9,7 @@
 #include <string.h>
 #include <semaphore.h>
 
+<<<<<<< HEAD
 #define BUFFER_SIZE 5 //buffer size for producer-consumer
 #define NUM_THREADS 4 //no of threads for each main task
 sem_t buffer_full, buffer_empty;
@@ -89,6 +90,9 @@ void initCpuCores(){
 #define JZ 10
 
 // Memory System
+=======
+
+>>>>>>> parent of c3ac688 (Update P3M2.c)
 //Define cache and RAM sizes
 #define L1_CACHE_SIZE 64
 #define L2_CACHE_SIZE 128
@@ -97,7 +101,10 @@ void initCpuCores(){
 int RAM[RAM_SIZE]; 
 int L1Cache[L1_CACHE_SIZE];
 int L2Cache[L2_CACHE_SIZE];
+<<<<<<< HEAD
 int MEMORY_TABLE_SIZE = RAM_SIZE / 10;
+=======
+>>>>>>> parent of c3ac688 (Update P3M2.c)
 //to solve the issue with the update system i simply make a struct with an InRam boolean check with tags.
 // this just does not update the ram value till the cache pushes the value out.
 struct Tags{
@@ -107,9 +114,11 @@ struct Tags{
 struct Tags L1Tags[L1_CACHE_SIZE];
 struct Tags L2Tags[L2_CACHE_SIZE];
 
+//memory table information:
+
+
 //Mutexes and semaphores for safe access
 sem_t cache_semaphore;
-
 //Structure for the Memory Table entry
 struct MemoryBlock {
  int processID;
@@ -328,7 +337,7 @@ int cacheLookup(int address) {
     //if in cache 1
     for(int i = 0; i < L1_CACHE_SIZE; i++){
         if(address == L1Tags[i].address){
-            printf("L1 Cache hit value: %d \n", L1Cache[i]);
+            printf("L1 Cache hit\n");
             return L1Cache[i];
         }
     }
@@ -336,7 +345,7 @@ int cacheLookup(int address) {
     //if in cache 2
     for (int i = 0; i < L2_CACHE_SIZE; i++){
         if(address == L2Tags[i].address){
-            printf("L2 Cache hit value:%d \n", L2Cache[i]);
+            printf("L2 Cache hit\n");
             return L2Cache[i];
         }
     }
@@ -344,7 +353,7 @@ int cacheLookup(int address) {
     // so that the cache updates cache and RAM address
     int value = RAM[address];
     updateCache(address,value,true);
-    return value;
+    return RAM[address];
 }
 
 //function to handle cache write policies (Write-Through-0 or Write-Back-1)
@@ -363,9 +372,12 @@ void cacheWrite(int address, int data, int writePolicy) {
 }
 
 //function for memory access with cache (includes semaphore protection)
-int accessMemory(int address, int data, bool isWrite) {
+int accessMemory(int address, int data, int isWrite) {
+ sem_wait(&cache_semaphore); //wait for cache access permission
+ pthread_mutex_lock(&memory_mutex); //lock memory for exclusive access
  int result;
  if (isWrite) {
+<<<<<<< HEAD
 	sem_wait(&cache_semaphore); //lock memory for exclusive access
 	cacheWrite(address, data, 1); //use 1 for write-policy through policy in this example
 	sem_post(&cache_semaphore); //unlock memory
@@ -375,9 +387,19 @@ int accessMemory(int address, int data, bool isWrite) {
 	result = cacheLookup(address); //fetch data from cache or RAM
 	sem_post(&cache_semaphore); //unlock memory
 
+=======
+ cacheWrite(address, data, 1); //use 1 for write-policy through policy in this example
+ result = 0;
  }
+ else {
+ result = cacheLookup(address); //fetch data from cache or RAM
+>>>>>>> parent of c3ac688 (Update P3M2.c)
+ }
+ pthread_mutex_unlock(&memory_mutex); //unlock memory
+ sem_post(&cache_semaphore); //release cache access
  return result;
 }
+<<<<<<< HEAD
 
 //add more based on the rquirements
 //Function to initialize memory with sample instructions
@@ -1010,4 +1032,19 @@ int main() {
     sem_destroy(&buffer_empty);
 
 	return 0;
+=======
+int main() {
+ //initialize memory, cache, mutex, and semaphore
+ initMemoryTable();
+ pthread_mutex_init(&memory_mutex, NULL);
+ sem_init(&cache_semaphore, 0, 1);
+ //Example of memory allocation and deallocation
+ int address = allocateMemory(1, 16); //eg : allocation for process 1
+ accessMemory(address, 42, 1); //write - data to allocated address
+ deallocateMemory(1); //deallocate - memory for process 1
+ //Clean up
+ pthread_mutex_destroy(&memory_mutex);
+ sem_destroy(&cache_semaphore);
+ return 0;
+>>>>>>> parent of c3ac688 (Update P3M2.c)
 }
