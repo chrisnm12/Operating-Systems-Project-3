@@ -133,6 +133,7 @@ struct PCB {
 	int state; // Process state (0 = ready, 1 = running, 3 = terminated)
 	int time; // Process time
 	int priority; // Process Priority Level (Higher number = higher priority)
+	float responseRatio;
 	struct MessageQueue messagesQueue; // Message Queue from IPC
 };
 
